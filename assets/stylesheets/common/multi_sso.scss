@@ -1,0 +1,12 @@
+@keyframes multi_sso_glowing {
+  0% { box-shadow: 0 0 0 0 #fa0; }
+  30% { box-shadow: 0 0 1em 0.5em #fa0; }
+  40% { box-shadow: 0 0 1em 0.5em #fa0; }
+  100% { box-shadow: 0 0 0 0 #fa0; }
+}
+
+.btn-social.multi_sso {
+  animation: multi_sso_glowing 2s infinite;
+  box-shadow: 0 0 1em 0.5em #fa0;
+  height: 5em;
+}

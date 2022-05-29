@@ -1,0 +1,13 @@
+login:
+  multi_sso_enabled:
+    default: false
+    client: true
+  multi_sso_select_title:
+    default: 'Select Discourse'
+    client: true
+  multi_sso_select_text:
+    default: 'Please select a Discourse instance you want to use for login.'
+    client: true
+  multi_sso_button_title:
+    default: 'with Discourse'
+    client: true

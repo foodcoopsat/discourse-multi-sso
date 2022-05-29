@@ -1,0 +1,6 @@
+en:
+  site_settings:
+    multi_sso_enabled: "Multi SSO is enabled"
+    multi_sso_select_title: "Title for the select page"
+    multi_sso_select_text: "Text for the select page"
+    multi_sso_button_title: "Text for the social login button"
