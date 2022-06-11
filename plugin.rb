@@ -149,13 +149,19 @@ module ::MultiSso
             result.failed = true
             result.failed_reason = error.to_s
           end
-        elsif !result.email_valid
+        elsif !result.email_valid && user.active
+          email_token = user.email_tokens.create!(email: user.email, scope: EmailToken.scopes[:email_login])
+          Jobs.enqueue(:critical_user_email,
+            type: "email_login",
+            user_id: user.id,
+            email_token: email_token.token
+          )
+
           user = nil
           result.failed = true
           escaped_id = Rack::Utils.escape_html("#{config_id}:#{external_id}")
           escaped_email = Rack::Utils.escape_html(result.email)
-          result.failed_reason = "Es gibt bereits ein Konto für die E-Mail-Adresse #{escaped_email}. Bitte melde dich mit den bestehenden Login-Daten an und schicke eine Nachricht mit dem Code '#{escaped_id}' an die Gruppe <b>@support</b>, um diese Funktion für dein Konto freischalten zu lassen. Falls du deine Login-Daten nicht mehr wissen solltest, kannst du dir über deine E-Mail-Adresse das Passwort zurücksetzen."
-          #TODO: send verification mail
+          result.failed_reason = "Es gibt bereits ein Konto für die E-Mail-Adresse #{escaped_email}. Wir haben dir einen Link an diese Adresse geschickt, mit dem du dich einloggen kannst. Falls du dich direkt einloggen können möchtest, schicke nach dem erfolgreichen Login mit dem an dich geschickten Link eine Nachricht über das Forum mit dem Code '#{escaped_id}' an die Gruppe <b>@support</b>, um diese Funktion für dein Konto freischalten zu lassen."
         end
 
         result.user = user
@@ -163,13 +169,12 @@ module ::MultiSso
 
       if user && !user.active
         if require_activation
+          email_token = user.email_tokens.create!(email: user.email, scope: EmailToken.scopes[:signup])
+          EmailToken.enqueue_signup_email(email_token)
+
           result.failed = true
           escaped_email = Rack::Utils.escape_html(result.email)
           result.failed_reason = "Um dein Konto zu aktivieren haben wir dir (erneut) eine E-Mail an #{escaped_email} geschickt. Bitte nutze den darin enthaltenen Link, um die Anmeldung abzuschließen"
-
-          email_token = user.email_tokens.unconfirmed.active.first
-          email_token ||= user.email_tokens.create(email: user.email)
-          Jobs.enqueue(:critical_user_email, type: :signup, user_id: user.id, email_token: email_token.token, to_address: user.email)
         else
           user.active = true
           user.save!
