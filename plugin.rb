@@ -184,7 +184,10 @@ module ::MultiSso
       if user
         (config[:groups] || []).each do |name|
           group = Group.find_by(name: name)
-          group.add(user) if group
+          if group
+            group.add(user)
+            user.update(primary_group: group)
+          end
         end
       end
 
