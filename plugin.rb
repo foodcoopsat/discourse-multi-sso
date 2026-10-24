@@ -8,7 +8,7 @@ require_dependency 'auth/authenticator.rb'
 
 register_asset 'stylesheets/common/multi_sso.scss'
 
-gem 'omniauth-discourse', '1.0.0'
+gem 'omniauth-discourse', '~> 2.0', git: 'https://github.com/foodcoopsat/omniauth-discourse.git', branch: 'main'
 
 enabled_site_setting :multi_sso_enabled
 
@@ -24,8 +24,17 @@ class ::OmniAuth::Strategies::MultiSso < ::OmniAuth::Strategies::Discourse
 
   def request_phase
     session[:destination_url] = options.destination_url if options.destination_url
-    return original_request_phase if options.sso_secret && options.sso_url
+    
+    # If config_id is provided, this is a POST request from the selection page
+    # or the strategy was already configured via setup
+    if options.config_id || (options.sso_secret && options.sso_url)
+      return original_request_phase
+    end
 
+    # First request - show selection page
+    # In OmniAuth 2.0, we need to handle both GET (for initial page) and POST (for form submission)
+    # For compatibility, we check if this is a POST request with an id parameter
+    
     title = SiteSetting.multi_sso_select_title
     text = SiteSetting.multi_sso_select_text
 
@@ -36,6 +45,11 @@ class ::OmniAuth::Strategies::MultiSso < ::OmniAuth::Strategies::Discourse
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
   <title>#{title}</title>
   <script>window.resizeTo(640,800)</script>
+  <style>
+    form { display: inline; }
+    button { background: none; border: none; padding: 0; font: inherit; cursor: pointer; text-align: left; }
+    button:hover { text-decoration: underline; }
+  </style>
 </head>
 <body style="font-family: sans-serif">
   <h1>#{title}</h1>
@@ -50,7 +64,12 @@ HTML
       id = psr.key[2..-1]
       config = PluginStore.cast_value(psr.type_name, psr.value)
       if config[:list]
-        html << "<li><a href=\"#{request_path}?id=#{id}\">#{config[:name]}</a></li>"
+        html << "<li>"
+        html << "<form action=\"#{request_path}\" method=\"post\">"
+        html << "<input type=\"hidden\" name=\"id\" value=\"#{id}\">"
+        html << "<button type=\"submit\">#{config[:name]}</button>"
+        html << "</form>"
+        html << "</li>"
       end
     end
 
@@ -87,10 +106,17 @@ module ::MultiSso
                         name: 'multi_sso',
                         setup: lambda { |env|
                           opts = env['omniauth.strategy'].options
-                          params = Rack::Utils.parse_query env['QUERY_STRING']
-
-                          config_id = params['id']
-                          if config = MultiSso.pstore_get("c:#{config_id}")
+                          
+                          # Handle POST requests from the selection form
+                          if env['REQUEST_METHOD'] == 'POST'
+                            params = Rack::Utils.parse_post(env)
+                            config_id = params['id']
+                          else
+                            params = Rack::Utils.parse_query env['QUERY_STRING']
+                            config_id = params['id']
+                          end
+                          
+                          if config_id && config = MultiSso.pstore_get("c:#{config_id}")
                             opts[:config_id] = config_id
                             opts[:sso_url] = config[:sso_url]
                             opts[:sso_secret] = config[:sso_secret]
