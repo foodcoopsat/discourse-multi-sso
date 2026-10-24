@@ -4,11 +4,12 @@
 # authors: Patrick Gansterer
 # url: https://github.com/paroga/discourse-multi-sso
 
+$LOAD_PATH.unshift File.expand_path("vendor/omniauth-discourse/lib", __dir__)
+require "omniauth-discourse"
+
 require_dependency 'auth/authenticator.rb'
 
 register_asset 'stylesheets/common/multi_sso.scss'
-
-gem 'omniauth-discourse', '~> 2.0', git: 'https://github.com/foodcoopsat/omniauth-discourse.git', branch: 'main'
 
 enabled_site_setting :multi_sso_enabled
 
@@ -20,21 +21,27 @@ class ::OmniAuth::Strategies::MultiSso < ::OmniAuth::Strategies::Discourse
   alias original_request_phase request_phase
 
   option :config_id
-  option :destination_url
+
+  # OmniAuth 2 builds callback_url from the *current* query string. The selection
+  # form POSTs `id` in the body, so it would be lost and the callback could not
+  # tell which config (and thus which sso_secret) to verify against. Carry it
+  # explicitly; the provider appends sso/sig to this URL.
+  def callback_url
+    return super unless options.config_id
+    "#{full_host}#{callback_path}?id=#{CGI.escape(options.config_id.to_s)}"
+  end
 
   def request_phase
-    session[:destination_url] = options.destination_url if options.destination_url
-    
-    # If config_id is provided, this is a POST request from the selection page
-    # or the strategy was already configured via setup
-    if options.config_id || (options.sso_secret && options.sso_url)
-      return original_request_phase
-    end
+    # setup already resolved a config from the `id` param
+    return original_request_phase if options.config_id
 
-    # First request - show selection page
-    # In OmniAuth 2.0, we need to handle both GET (for initial page) and POST (for form submission)
-    # For compatibility, we check if this is a POST request with an id parameter
-    
+    # Discourse only allows POST on /auth/:provider and verifies the CSRF token
+    # in before_request_phase, so the selection forms need a token too. The
+    # current request already passed that check, so call() won't raise here.
+    verifier = CSRFTokenVerifier.new
+    verifier.call(env)
+    csrf_token = Rack::Utils.escape_html(verifier.form_authenticity_token)
+
     title = SiteSetting.multi_sso_select_title
     text = SiteSetting.multi_sso_select_text
 
@@ -66,6 +73,7 @@ HTML
       if config[:list]
         html << "<li>"
         html << "<form action=\"#{request_path}\" method=\"post\">"
+        html << "<input type=\"hidden\" name=\"authenticity_token\" value=\"#{csrf_token}\">"
         html << "<input type=\"hidden\" name=\"id\" value=\"#{id}\">"
         html << "<button type=\"submit\">#{config[:name]}</button>"
         html << "</form>"
@@ -106,21 +114,20 @@ module ::MultiSso
                         name: 'multi_sso',
                         setup: lambda { |env|
                           opts = env['omniauth.strategy'].options
-                          
-                          # Handle POST requests from the selection form
-                          if env['REQUEST_METHOD'] == 'POST'
-                            params = Rack::Utils.parse_post(env)
-                            config_id = params['id']
-                          else
-                            params = Rack::Utils.parse_query env['QUERY_STRING']
-                            config_id = params['id']
-                          end
-                          
+                          # GET query + POST form body (selection form, callback ?id=)
+                          params = Rack::Request.new(env).params
+                          config_id = params['id'].presence
+
                           if config_id && config = MultiSso.pstore_get("c:#{config_id}")
                             opts[:config_id] = config_id
                             opts[:sso_url] = config[:sso_url]
                             opts[:sso_secret] = config[:sso_secret]
-                            opts[:destination_url] = params['destination_url']
+                          end
+
+                          # Legacy ?destination_url=: Discourse core now owns the
+                          # redirect target and reads it from omniauth.origin.
+                          if (dest = params['destination_url'].presence)
+                            env['rack.session']['omniauth.origin'] = dest
                           end
                         }
     end
@@ -141,7 +148,6 @@ module ::MultiSso
       external_id = auth_token[:uid]
       data = auth_token[:info]
       extra = auth_token[:extra]
-      session = auth_token[:session]
 
       config_id = extra[:config_id]
       config = MultiSso.pstore_get("c:#{config_id}")
@@ -149,7 +155,6 @@ module ::MultiSso
       auth_token[:provider] = "#{name}:#{config_id}"
       result = super(auth_token)
       result.email_valid = config[:trust_email] && !extra[:require_activation]
-      result.destination_url = session[:destination_url]
 
       require_activation = config[:require_activation] || config[:trust_email] && extra[:require_activation]
 
